@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Fake pgrep: prints $FAKE_PGREP_PIDS one per line.
+for p in ${FAKE_PGREP_PIDS:-}; do echo "$p"; done
+exit 0

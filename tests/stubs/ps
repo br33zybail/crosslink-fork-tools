@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Fake ps: "ps -p PID -o comm=" prints the basename of the fake exe.
+pid=""; while [ $# -gt 0 ]; do [ "$1" = "-p" ] && pid="$2"; shift; done
+f="${FAKE_PROC:?}/$pid/exe"; [ -f "$f" ] && basename "$(/bin/cat "$f")"
+exit 0

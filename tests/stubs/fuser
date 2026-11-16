@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Fake fuser: prints $FAKE_FUSER_PIDS (space separated) as fuser would.
+[ -n "${FAKE_FUSER_PIDS:-}" ] && printf ' %s' $FAKE_FUSER_PIDS
+exit 0

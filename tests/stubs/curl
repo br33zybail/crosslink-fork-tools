@@ -1,0 +1,169 @@
+#!/usr/bin/env python3
+"""Fake curl for the tests. No network: every request is answered from a
+synthetic chain described by FAKE_* environment variables, or fails.
+
+Block hashes are generated, never stored: the canonical hash at height h is h
+written as 64 hex digits (mostly zeros). A forked block gets an 'e' prefix
+instead of a leading zero, and an orphan served by reference B gets a 'd'.
+"""
+import json
+import os
+import sys
+
+
+def env(name, default=""):
+    return os.environ.get(name, default)
+
+
+def canon(h):
+    return f"{h:064x}"
+
+
+def ours(h):
+    fork_at = env("FAKE_OUR_FORK_AT")
+    if fork_at and h >= int(fork_at):
+        return "e" + f"{h:063x}"
+    return canon(h)
+
+
+def log_call(argv):
+    path = env("FAKE_CURL_LOG")
+    if path:
+        with open(path, "a") as f:
+            f.write(" ".join(argv) + "\n")
+
+
+def parse(argv):
+    takes_value = {"-m", "-H", "-d", "--data-binary", "--data-raw", "-A", "-o", "-X", "--max-time", "--data"}
+    opts = {"-H": [], "data": None, "out": None}
+    url = None
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a in takes_value:
+            v = argv[i + 1] if i + 1 < len(argv) else ""
+            if a == "-H":
+                opts["-H"].append(v)
+            elif a in ("-d", "--data-binary", "--data-raw", "--data"):
+                opts["data"] = v
+            elif a == "-o":
+                opts["out"] = v
+            i += 2
+            continue
+        if a.startswith("-"):
+            i += 1
+            continue
+        url = a
+        i += 1
+    return url, opts
+
+
+def rpc(payload):
+    tip = int(env("FAKE_OUR_TIP", "0") or 0)
+    if tip <= 0:
+        return None  # node down: curl prints nothing
+    req = json.loads(payload)
+    m, p = req.get("method"), req.get("params") or []
+    if m == "getblockchaininfo":
+        r = {"blocks": tip, "bestblockhash": ours(tip)}
+    elif m == "getblockcount":
+        r = tip
+    elif m == "getblockhash":
+        h = int(p[0])
+        if h > tip or h < 0:
+            return json.dumps({"result": None, "error": {"code": -8, "message": "out of range"}})
+        r = ours(h)
+    elif m == "getpeerinfo":
+        peers = env("FAKE_PEERS", "8")
+        if peers == "down":
+            return None
+        r = [{"addr": f"peer-{i}"} for i in range(int(peers))]
+    elif m == "get_tfl_final_block_height_and_hash":
+        fin = int(env("FAKE_FIN_H", str(max(tip - 5, 1))))
+        r = {"height": fin, "hash": list(bytes.fromhex(ours(fin)))[::-1]}
+    elif m == "get_tfl_recency_status":
+        r = {"my_height": int(env("FAKE_POS_H", "77")), "my_round": 0}
+    else:
+        return json.dumps({"result": None, "error": {"code": -32601, "message": "unknown"}})
+    return json.dumps({"result": r, "error": None, "id": req.get("id")})
+
+
+def ref_a(path):
+    tip = env("FAKE_REFA_TIP")
+    if not tip:
+        return None  # unreachable
+    tip = int(tip)
+    if path == "/tip":
+        if env("FAKE_REFA_TIP_RAW"):  # hostile reference: tip is any JSON value
+            return '{"tip": ' + env("FAKE_REFA_TIP_RAW") + "}"
+        return json.dumps({"tip": tip})
+    if path.startswith("/block/"):
+        if env("FAKE_REFA_MODE", "ok") == "dataless":
+            return json.dumps({"error": "not found"})
+        h = int(path[len("/block/"):])
+        if h > tip:
+            return json.dumps({"error": "not found"})
+        return json.dumps({"block": {"height": h, "hash": env("FAKE_REFA_BLOCK_HASH") or canon(h)}})
+    return None
+
+
+def ref_b():
+    if env("FAKE_REFB_BODY_FILE"):  # hostile reference: serve this document verbatim
+        with open(env("FAKE_REFB_BODY_FILE")) as f:
+            return f.read()
+    tip = env("FAKE_REFB_TIP")
+    if not tip:
+        return None
+    tip = int(tip)
+    tip_hash = canon(tip)
+    if env("FAKE_REFB_TIP_ORPHAN") == "1":
+        tip_hash = "d" + f"{tip:063x}"
+    if env("FAKE_REFB_TIP_HASH"):
+        tip_hash = env("FAKE_REFB_TIP_HASH")
+    bad = env("FAKE_REFB_ANCHOR_BAD")
+    anchors = []
+    for d in (5, 20, 100, 600, 1500):
+        h = tip - d
+        if h < 1:
+            continue
+        hh = canon(h)
+        if bad and h == int(bad):
+            hh = "d" + f"{h:063x}"
+        anchors.append({"height": h, "cipherscan_hash": hh})
+    return json.dumps({"cipherscan": {"tip": tip, "tip_hash": tip_hash}, "anchors": anchors})
+
+
+def main():
+    argv = sys.argv[1:]
+    log_call(argv)
+    url, opts = parse(argv)
+    if not url:
+        return 2
+    body = None
+    rpc_url = env("RPC_URL")
+    ref_a_api = env("REF_A_API")
+    ref_b_url = env("REF_B_URL")
+    hook = env("ALERT_WEBHOOK")
+    if hook and url == hook:
+        with open(env("FAKE_WEBHOOK_LOG", "/dev/null"), "a") as f:
+            f.write(json.dumps({"headers": opts["-H"], "body": opts["data"]}) + "\n")
+        return 0
+    if rpc_url and url == rpc_url:
+        body = rpc(opts["data"] or "{}")
+    elif ref_a_api and url.startswith(ref_a_api + "/"):
+        body = ref_a(url[len(ref_a_api):])
+    elif ref_b_url and url == ref_b_url:
+        body = ref_b()
+    else:
+        return 6  # "could not resolve host": nothing else is reachable
+    if body is None:
+        return 7  # "failed to connect"
+    if opts["out"]:
+        with open(opts["out"], "w") as f:
+            f.write(body)
+    else:
+        sys.stdout.write(body)
+    return 0
+
+
+sys.exit(main())

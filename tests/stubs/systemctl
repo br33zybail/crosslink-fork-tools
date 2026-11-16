@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Fake systemctl for the tests. Never touches a real unit.
+#   show <unit> -p MainPID --value  -> $FAKE_MAIN_PID
+#   is-active --quiet <unit>        -> exit 0 if FAKE_UNIT_ACTIVE=1, else 3
+for a in "$@"; do
+  case "$a" in
+    show) echo "${FAKE_MAIN_PID:-0}"; exit 0;;
+    is-active) [ "${FAKE_UNIT_ACTIVE:-1}" = 1 ] && exit 0; exit 3;;
+  esac
+done
+exit 1

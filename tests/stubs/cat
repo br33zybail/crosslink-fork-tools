@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Fake cat: /proc/<pid>/cgroup comes from $FAKE_PROC/<pid>/cgroup; all else is real cat.
+if [ $# -eq 1 ] && [[ "$1" =~ ^/proc/([0-9]+)/cgroup$ ]]; then
+  f="${FAKE_PROC:?}/${BASH_REMATCH[1]}/cgroup"
+  [ -f "$f" ] && { /bin/cat "$f"; exit 0; }
+  exit 1
+fi
+exec /bin/cat "$@"

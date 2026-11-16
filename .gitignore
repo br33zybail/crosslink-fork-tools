@@ -1,0 +1,10 @@
+# local settings and runtime state
+config.env
+*.env
+!config.example.env
+state/
+*.log
+
+# test scratch
+tests/.work/
+__pycache__/

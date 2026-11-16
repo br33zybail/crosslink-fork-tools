@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Fake journalctl for the tests: prints a canned journal, ignores filters.
+#   -k -> $FAKE_KERNEL_LOG ; anything else -> $FAKE_JOURNAL
+for a in "$@"; do
+  [ "$a" = "-k" ] && { [ -f "${FAKE_KERNEL_LOG:-}" ] && /bin/cat "$FAKE_KERNEL_LOG"; exit 0; }
+done
+[ -f "${FAKE_JOURNAL:-}" ] && /bin/cat "$FAKE_JOURNAL"
+exit 0
